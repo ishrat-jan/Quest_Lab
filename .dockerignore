@@ -6,3 +6,5 @@ tests
 **/__pycache__
 *.egg-info
 .pytest_cache
+# nu=0.01 models are documented negative results, not served (api.supported_nu) - keep them in git, not in the image
+artifacts/*nu0.01*

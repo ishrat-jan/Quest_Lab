@@ -25,14 +25,15 @@ assumed**: our own solver reproduces stored PDEBench trajectories only with `D =
 |---|---|
 | Input  | `(B, 256, 2)` = `[u(x, 0), x]` on the grid `x_j = (j + 0.5) / 256` |
 | Output | `(B, 256, 10)` = `u(x, t)` at `t = 0.2, 0.4, ..., 2.0`; **supported window t <= 1.0** (later times low confidence, see Results) |
-| Viscosity | **one model per nu**; only `nu = 0.1` is trained. Other values are rejected (HTTP 422). |
+| Viscosity | **one model per nu**; only `nu = 0.1` is **served**. `nu = 0.01` was trained and evaluated but fails the accuracy rule (see Results), so it and all other values are rejected (HTTP 422). |
 | Architecture | FNO1d: lift -> 4 x (spectral conv on 16 lowest Fourier modes + pointwise conv) -> projection; 551k real parameters |
 | Physics constraint | the spatial mean of each output is set to mean(u0) (exact conservation law of periodic Burgers) |
 | Loss | MSE (with the mean fixed, this acts on the evolving fluctuation) |
 
 Why these choices:
 * **Direct map u0 -> all snapshots** (not autoregressive): one forward pass gives the
-  space-time field, no error accumulation.
+  space-time field, no step-to-step error accumulation. At nu = 0.01 this formulation
+  misplaces shocks increasingly with t (see the nu = 0.01 analysis).
 * **256 grid** (stride 4 of PDEBench's 1024): the nu = 0.1 solutions are smooth; the
   reference solver gives the same accuracy at 256 and 1024 points.
 * **MSE, not per-sample relative L2.** At nu = 0.1 the field decays quickly to its
@@ -42,8 +43,9 @@ Why these choices:
 
 ## Data
 
-* Source: PDEBench 1D Burgers, DaRUS `doi:10.18419/darus-2986`, file
-  `1D_Burgers_Sols_Nu0.1.hdf5` (8.23 GB, 10000 simulations x 201 times x 1024 points).
+* Source: PDEBench 1D Burgers, DaRUS `doi:10.18419/darus-2986`, files
+  `1D_Burgers_Sols_Nu0.1.hdf5` (DaRUS file id 268185) and `1D_Burgers_Sols_Nu0.01.hdf5`
+  (281363); each 8.23 GB, 10000 simulations x 201 times x 1024 points, same layout.
 * The HDF5 layout was inspected **without downloading the file**
   (`scripts/inspect_remote_hdf5.py`: the first/last 64 KB placed in a sparse local file and
   read with h5py). `tensor` is contiguous little-endian float32 at byte offset 2048.
@@ -71,6 +73,7 @@ integrating-factor RK4 (diffusion integrated exactly), adaptive CFL step.
 | Exact Cole-Hopf solution | rel. L2 ~1e-12 |
 | 30 PDEBench trajectories, 1024 and 256 points | mean rel. L2 1.0e-3, max abs. error <= 5e-3 |
 | Control: `D = nu` | rel. L2 1.3e-1 (rejected) |
+| 30 PDEBench trajectories at nu = 0.01, 1024 / 256 points | mean rel. L2 3.1e-4 / 3.7e-4; fluctuation error <= 0.53 % at every t; `D = nu` control 1.6e-1 |
 | Control: no convection / mean-advection only / c = 0.5 / c = 2 | fluctuation error 0.26-0.72 at t = 0.1 vs **3.4e-4** for full Burgers |
 
 The convection controls (`scripts/convection_controls.py`) show the nonlinear term is
@@ -292,7 +295,8 @@ python scripts/verify_download.py --file data/pdebench/burgers_nu0.1_n1200_strid
        --probe data/probe/probe_268185.h5        # probe from scripts/inspect_remote_hdf5.py --file-id 268185
 python scripts/validate_solver.py --file data/pdebench/burgers_nu0.1_n1200_stride10.h5
 
-# train (~20 min on a 2-core laptop CPU) -> artifacts/
+# train -> artifacts/  (2-core i3 CPU: speed test predicted ~20 min; the run took 55 min
+# because the machine slowed down after the first epochs)
 python -m pde_service.training.train --nu 0.1
 
 # run
@@ -303,6 +307,21 @@ pytest
 The trained checkpoint, held-out test samples and metrics in `artifacts/` are committed,
 so the app runs without downloading data or training.
 
+Reproducing the analyses (each writes a JSON in `artifacts/`, plots in `runs/`):
+
+```bash
+python scripts/data_stats.py --file data/pdebench/burgers_nu0.1_n1200_stride10.h5       # API input limits
+python scripts/convection_controls.py --file data/pdebench/burgers_nu0.1_n1200_stride10.h5
+python scripts/error_vs_time.py --nu 0.1                                                 # time window
+# nu = 0.01 (negative result)
+python scripts/download_subset.py --nu 0.01
+python -m pde_service.training.train --nu 0.01                                           # 32 modes
+python -m pde_service.training.train --nu 0.01 --experiment sym --skip-test              # candidate, validation only
+python -m pde_service.training.train --nu 0.01 --experiment sym --eval-only              # selected -> test once
+python scripts/error_vs_time.py --nu 0.01 --experiment sym
+python scripts/shock_analysis.py
+```
+
 ### Docker / Render
 
 ```bash
@@ -311,14 +330,25 @@ docker build -t burgers-fno . && docker run -p 8000:8000 -e PORT=8000 burgers-fn
 
 On Render: new Web Service from this repo, environment "Docker". Render sets `PORT`.
 
+`.dockerignore` keeps the unserved nu = 0.01 artifacts out of the image (they stay in git
+as evidence). What was checked without Docker: every pinned package has a Python 3.12
+manylinux x86_64 wheel (torch from the CPU index), and the exact `CMD` was run with
+`PORT=8899` from a copy containing only the files the Dockerfile copies (`configs`, `src`,
+`frontend`, `artifacts`, with `PYTHONPATH=src`): health, prediction and frontend responded.
+A real `docker build` has not been run.
+
 ## Tests
 
-* Unit: FNO shapes, resolution independence, mean conservation; solver vs exact
-  Cole-Hopf, mean conservation, invalid inputs; byte-offset arithmetic; metrics; split
-  disjointness.
+`pytest`: 46 tests.
+
+* Unit: FNO shapes, resolution independence, mean conservation, exact shift equivariance
+  without the x channel (and its absence with it); solver vs exact Cole-Hopf, mean
+  conservation, invalid inputs; byte-offset arithmetic; metrics (incl. a regression test
+  for the per-simulation metric bug); split disjointness; reflection on the cell-centred
+  grid.
 * Data (skipped if data not downloaded): solver vs PDEBench.
 * Integration: full API on an **untrained** fixture checkpoint (validation, status codes,
-  shapes; no accuracy claims).
+  shapes, warnings, `reliable_t_max`; no accuracy claims).
 * **Synthetic smoke test** of the training pipeline (solver-generated data, labelled
   `SYNTHETIC SMOKE TEST`; says nothing about accuracy).
 
@@ -336,7 +366,8 @@ src/pde_service/
   metrics.py
 frontend/                   index.html, style.css, app.js (Plotly via CDN)
 scripts/                    inspection, download, verification, solver validation, controls
-artifacts/                  checkpoint, test samples, metrics, validation reports
+artifacts/                  checkpoints, test samples, metrics, validation/analysis reports
+docs/                       figures used in this README
 tests/
 ```
 

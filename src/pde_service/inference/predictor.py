@@ -33,7 +33,7 @@ class Predictor:
     def __init__(self, nu: float, checkpoint: Path, test_samples: Path | None, limits: dict):
         if not checkpoint.exists():
             raise ModelNotAvailable(f"checkpoint {checkpoint} not found; train the model first")
-        ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        ckpt = torch.load(checkpoint, map_location="cpu", weights_only=True)  # no arbitrary pickle code
         if abs(ckpt["nu"] - nu) > 1e-12:
             raise ModelNotAvailable(f"{checkpoint} was trained for nu={ckpt['nu']}, not {nu}")
         self.nu = float(ckpt["nu"])
