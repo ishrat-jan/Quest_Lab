@@ -191,6 +191,66 @@ misses the 5 % window rule fixed before these results, so **nu = 0.01 remains un
 by the API. The rule was not relaxed after seeing the numbers. The two changes were made
 together, so their individual contributions are not separated.
 
+#### Why nu = 0.01 fails the 5 % rule (`scripts/shock_analysis.py`, `artifacts/shock_analysis.json`)
+
+No further training was done for this analysis; it uses the two existing models (nu = 0.1
+served model, nu = 0.01 `sym` model) on their 200 held-out test simulations, 256 grid.
+A "front" is a grid point with |du/dx| > 5 in PDEBench, dilated by
++-3 cells.
+
+Error per time, side by side:
+
+| t | 0.2 | 0.4 | 0.6 | 1.0 | 1.4 | 2.0 |
+|---|---|---|---|---|---|---|
+| RMS true fluctuation, nu = 0.1 / 0.01 | 0.235 / 0.370 | 0.157 / 0.272 | 0.112 / 0.212 | 0.062 / 0.147 | 0.036 / 0.112 | 0.017 / 0.081 |
+| FNO RMSE, nu = 0.1 / 0.01 | 0.0049 / 0.0351 | 0.0039 / 0.0372 | 0.0028 / 0.0374 | 0.0027 / 0.0328 | 0.0027 / 0.0311 | 0.0020 / 0.0306 |
+| FNO fluct. rel. L2, nu = 0.1 | 2.1 % | 2.5 % | 2.5 % | 4.3 % | 7.5 % | 11.9 % |
+| **FNO fluct. rel. L2, nu = 0.01** | 9.5 % | 13.7 % | 17.6 % | 22.3 % | 27.8 % | 37.9 % |
+| solver fluct. rel. L2, nu = 0.01 (data floor) | 0.1 % | 0.1 % | 0.0 % | 0.2 % | 0.3 % | 0.5 % |
+
+Front diagnostics, nu = 0.01:
+
+| t | 0.2 | 0.4 | 0.6 | 1.0 | 1.4 | 2.0 |
+|---|---|---|---|---|---|---|
+| test simulations with a front | 185 | 168 | 154 | 122 | 80 | 68 |
+| front area share | 16.2 % | 11.5 % | 8.0 % | 4.8 % | 2.6 % | 1.9 % |
+| **FNO error energy inside fronts** | 61.9 % | 56.2 % | 49.7 % | 36.2 % | 27.3 % | 13.9 % |
+| front width (median, grid cells) | 5.7 | 7.1 | 7.7 | 8.9 | 8.8 | 9.7 |
+| **mean \|front position offset\| FNO, cells** | 0.42 | 1.02 | 2.10 | 3.04 | 4.33 | 5.07 |
+| fronts with nonzero offset | 32.4 % | 56.5 % | 76.0 % | 87.7 % | 90.0 % | 97.1 % |
+| true energy above k = 16 | 0.6 % | 0.4 % | 0.3 % | 0.1 % | 0.0 % | 0.0 % |
+
+![Shock front, nu = 0.01](docs/shock_front_nu0.01.png)
+
+*Test simulation #607: PDEBench (black, grid points), reference solver (green dotted),
+FNO (red dashed), |FNO − PDEBench| (bars), zoomed to +-14 cells around the steepest front.*
+
+What was tested:
+
+| Hypothesis | Measurement | Verdict |
+|---|---|---|
+| 256 grid too coarse for the shocks | fronts are 5.7-9.7 cells wide; solver at 256 points matches PDEBench to <= 0.5 % | refuted |
+| Too few Fourier modes | true fluctuation energy above k = 16 is <= 0.6 %, above k = 32 < 0.05 % | refuted (by energy) |
+| Error concentrated at fronts | 62 % of FNO error energy in 16 % of the domain at t = 0.2 | supported |
+| Shock position drifts with time | mean offset 0.4 -> 5.1 cells (t = 0.2 -> 2.0); nonzero for 32 % -> 97 % of fronts | supported |
+| Data-limited overfitting | validation plateau while train loss falls; exact symmetries halve the test error | supported |
+
+The plot shows the failure modes directly: at t = 0.2 the front is in the right place
+(plateau ~0.05 low); at t = 0.6 it is 1-2 cells late; at t = 1.2 it is both displaced and
+smeared (much less steep than the truth), with local errors ~0.2. At nu = 0.1, fronts are
+wider (median 11.6-11.7 cells), appear in at most 55 of 200 test
+simulations, and only up to t = 0.4; the solution is then smooth and decaying, so position
+errors never persist.
+
+Interpretation (consistent with these measurements, not proven): a shock moves at the
+average of its left and right states, so its position depends on the whole solution
+history. The FNO maps u0 directly to each output time, so small amplitude errors become
+position errors that grow with t; at a jump of height J an offset of delta costs ~J^2 delta
+in squared error, so a few cells are enough to dominate the L2 error.
+
+Not tested (would be next steps): more training data, an autoregressive / time-stepping
+formulation, larger width, or a shock-aware loss. Whether 5 % is reachable is unknown.
+
 History notes, for transparency: (1) the per-simulation statistics were first computed
 with a bug (a single field passed without a sample axis); fixed and recomputed from the
 same checkpoint (`--eval-only`), regression test added; overall metrics were unaffected.
