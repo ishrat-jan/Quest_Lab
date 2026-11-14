@@ -45,6 +45,8 @@ class Predictor:
         self.model.eval()
         self.meta = {k: ckpt[k] for k in ("epoch", "val_rel_l2", "data_source", "train_u0_abs_max")}
         self.max_abs_u0 = float(limits["max_abs_u0"])
+        self.warn_abs_u0 = float(limits["warn_abs_u0"])
+        self.mean_range = tuple(limits["mean_range"])
         self.k_cut = int(limits["ood_k_cut"])
         self.ood_energy = float(limits["ood_energy_fraction"])
         self.test = None
@@ -74,6 +76,13 @@ class Predictor:
         warnings = []
         if peak < 1e-8:
             warnings.append("u0 is identically zero; the exact solution is u = 0")
+        elif peak > self.warn_abs_u0:
+            warnings.append(f"max|u0| = {peak:.3g} is larger than ~99% of training initial conditions "
+                            f"(> {self.warn_abs_u0:g}); expect lower accuracy")
+        mean = float(u0.mean())
+        if not self.mean_range[0] <= mean <= self.mean_range[1]:
+            warnings.append(f"mean(u0) = {mean:.3g} is outside the training range "
+                            f"[{self.mean_range[0]:g}, {self.mean_range[1]:g}]; the mean sets the advection speed")
         hf = spectral_energy_fraction_above(u0, self.k_cut)
         if hf > self.ood_energy:
             warnings.append(

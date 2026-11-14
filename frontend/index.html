@@ -102,7 +102,7 @@
         This is the PDEBench convention (diffusion coefficient &nu;/&pi;), which we verified by reproducing PDEBench
         trajectories with our own solver.</p>
       <h3>Model</h3>
-      <p>A Fourier Neural Operator maps u(x,0) on a 256-point grid directly to u(x,t) at t = 0.1, 0.2, &hellip;, 2.0.
+      <p>A Fourier Neural Operator maps u(x,0) on a 256-point grid directly to u(x,t) at t = 0.2, 0.4, &hellip;, 2.0 (10 snapshots), conserving the spatial mean exactly.
         It was trained on a subset of the official PDEBench 1D Burgers data for a single viscosity.</p>
       <div id="metrics-info" class="hint">Loading test metrics&hellip;</div>
     </div>
@@ -117,6 +117,9 @@
         <li>Input must be on the model grid (N points, periodic). Amplitudes above the training range are rejected.</li>
         <li>Initial conditions unlike the training distribution (sharp or high-frequency) are accepted with a warning;
           the FNO error can then be large, so check the solver comparison.</li>
+        <li>At &nu; = 0.1 about 96% of the fluctuation energy has dissipated by t = 0.5, so late-time fields are
+          nearly constant. Relative errors on the remaining small fluctuations are large even for the reference
+          solver (~7% at t = 2 vs PDEBench), so late-time comparisons have a floor of a few percent.</li>
         <li>Outputs exist only at the trained snapshot times. The model knows nothing about other boundary conditions or domains.</li>
       </ul>
     </div>

@@ -34,7 +34,8 @@ def client(tmp_path_factory, monkeypatch_module):
 
     cfg = copy.deepcopy(load_config())
     cfg["training"]["artifact_dir"] = str(art)
-    cfg["api"].update(supported_nu=[0.1], max_abs_u0=2.5, ood_k_cut=8, ood_energy_fraction=0.05)
+    cfg["api"].update(supported_nu=[0.1], max_abs_u0=2.5, warn_abs_u0=2.0, mean_range=[-1.0, 1.0],
+                      ood_k_cut=8, ood_energy_fraction=0.05)
     cfg_path = tmp / "cfg.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg))
     monkeypatch_module.setenv("PDE_SERVICE_CONFIG", str(cfg_path))
@@ -135,6 +136,15 @@ def test_high_frequency_input_warns(client):
     u0 = (0.5 * np.sin(2 * np.pi * 20 * x)).tolist()
     d = client.post("/api/predict", json={"nu": 0.1, "u0": u0, "run_solver": False}).json()
     assert any("wavenumbers" in w for w in d["warnings"])
+
+
+def test_large_amplitude_and_mean_warn(client):
+    x = (np.arange(N) + 0.5) / N
+    d = client.post("/api/predict", json={"nu": 0.1, "u0": (2.2 * np.sin(2 * np.pi * x)).tolist(),
+                                          "run_solver": False}).json()
+    assert any("99% of training" in w for w in d["warnings"])
+    d = client.post("/api/predict", json={"nu": 0.1, "u0": [1.5] * N, "run_solver": False}).json()
+    assert any("mean(u0)" in w for w in d["warnings"])
 
 
 def test_invalid_preset_parameters(client):

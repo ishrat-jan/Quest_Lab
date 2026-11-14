@@ -1,0 +1,172 @@
+# PDE Solutions as a Service: 1D Burgers + Fourier Neural Operator
+
+A web application that predicts the solution of the 1D viscous Burgers equation from a
+user-supplied initial condition, using a Fourier Neural Operator (FNO) trained on the
+official **PDEBench** dataset, and checks the prediction against an independent,
+validated numerical solver.
+
+> **Deployment status:** not deployed by me. The repository contains a Dockerfile
+> intended for Render (it honours `$PORT`). It has not been built locally (no Docker
+> on the development machine), so the first real image build will be on the host.
+
+## The problem
+
+```
+u_t + (u^2 / 2)_x = (nu / pi) u_xx,    x in [0, 1) periodic,   t in [0, 2]
+```
+
+This is the PDEBench convention (diffusion coefficient `nu/pi`). It was **verified, not
+assumed**: our own solver reproduces stored PDEBench trajectories only with `D = nu/pi`
+(rel. L2 ~1e-3), while `D = nu` is ~130x worse (`scripts/validate_solver.py`).
+
+## What the model does
+
+| | |
+|---|---|
+| Input  | `(B, 256, 2)` = `[u(x, 0), x]` on the grid `x_j = (j + 0.5) / 256` |
+| Output | `(B, 256, 10)` = `u(x, t)` at `t = 0.2, 0.4, ..., 2.0` |
+| Viscosity | **one model per nu**; only `nu = 0.1` is trained. Other values are rejected (HTTP 422). |
+| Architecture | FNO1d: lift -> 4 x (spectral conv on 16 lowest Fourier modes + pointwise conv) -> projection; 551k real parameters |
+| Physics constraint | the spatial mean of each output is set to mean(u0) (exact conservation law of periodic Burgers) |
+| Loss | MSE (with the mean fixed, this acts on the evolving fluctuation) |
+
+Why these choices:
+* **Direct map u0 -> all snapshots** (not autoregressive): one forward pass gives the
+  space-time field, no error accumulation.
+* **256 grid** (stride 4 of PDEBench's 1024): the nu = 0.1 solutions are smooth; the
+  reference solver gives the same accuracy at 256 and 1024 points.
+* **MSE, not per-sample relative L2.** At nu = 0.1 the field decays quickly to its
+  (conserved) mean, so a full-field relative loss rewards predicting the mean. A
+  per-sample relative loss on the fluctuation would divide by near-zero fluctuations and
+  fit numerical ripples in the data.
+
+## Data
+
+* Source: PDEBench 1D Burgers, DaRUS `doi:10.18419/darus-2986`, file
+  `1D_Burgers_Sols_Nu0.1.hdf5` (8.23 GB, 10000 simulations x 201 times x 1024 points).
+* The HDF5 layout was inspected **without downloading the file**
+  (`scripts/inspect_remote_hdf5.py`: the first/last 64 KB placed in a sparse local file and
+  read with h5py). `tensor` is contiguous little-endian float32 at byte offset 2048.
+* Only what is needed is downloaded with HTTP range requests
+  (`scripts/download_subset.py`): the first **1200 simulations**, time indices
+  `0, 10, ..., 200` (t = 0, 0.1, ..., 2.0): ~100 MB instead of 8.2 GB.
+* Verified (`scripts/verify_download.py`): shapes, 0 NaN/Inf, and a byte-offset check
+  through h5py's own layout logic (whole samples 0/600/1199 bit-identical to the
+  row-wise download); conservation of the mean.
+* **Split by whole simulation**, seed 0: 900 train / 100 validation / 200 test; overlap
+  0/0/0 (checked at training time; training aborts on any overlap). The test split is
+  evaluated once, with the best-on-validation checkpoint.
+
+## Independent validation: the reference solver
+
+`src/pde_service/solver/burgers.py`: Fourier pseudo-spectral, 2/3 dealiasing,
+integrating-factor RK4 (diffusion integrated exactly), adaptive CFL step.
+
+| Check | Result |
+|---|---|
+| Exact Cole-Hopf solution | rel. L2 ~1e-12 |
+| 30 PDEBench trajectories, 1024 and 256 points | mean rel. L2 1.0e-3, max abs. error <= 5e-3 |
+| Control: `D = nu` | rel. L2 1.3e-1 (rejected) |
+| Control: no convection / mean-advection only / c = 0.5 / c = 2 | fluctuation error 0.26-0.72 at t = 0.1 vs **3.4e-4** for full Burgers |
+
+The convection controls (`scripts/convection_controls.py`) show the nonlinear term is
+essential at nu = 0.1: in the PDEBench data `|u' u_x| / |D u_xx| ~ 0.55` for t = 0.1-0.4,
+and dropping convection gives 72 % error already at t = 0.1. Energy is dissipated only by
+diffusion, but convection (steepening) sets the rate.
+
+**Known limitation of the comparison:** ~96 % of the fluctuation energy is gone by t = 0.5.
+The stored PDEBench fields also contain small (~5e-4) ripples that do not decay, most
+likely an artefact of PDEBench's own numerical scheme (observed, cause not verified). As a
+result, relative errors on the late-time fluctuation have a floor of a few percent even
+for the reference solver (7 % at t = 2).
+
+## Results (real PDEBench, held-out test split)
+
+_Filled in from `artifacts/metrics_nu0.1.json` after training._
+
+## Application
+
+* `GET /api/health`, `GET /api/info` (supported nu, grid, real test metrics)
+* `POST /api/initial-condition`: presets (sine sum, periodic Gaussian, held-out PDEBench
+  test sample)
+* `POST /api/predict`: `{nu, u0 | test_index, run_solver}` -> FNO field, optional
+  reference-solver field, PDEBench reference for test samples, MSE/RMSE/rel. L2, warnings
+* Frontend at `/`: Plotly heatmaps (FNO, reference, |error|), time-slice plot, metrics,
+  loading/error/warning states, JSON/CSV download, explanation of the PDE and the limits.
+
+Input handling (thresholds from `scripts/data_stats.py` on the **training** ICs):
+
+| Condition | Response |
+|---|---|
+| nu not trained, wrong grid length, NaN/Inf, malformed JSON | 422 with a readable message |
+| max\|u0\| > 3.2 (training max 3.14) | 422 |
+| max\|u0\| > 2.4 (training p99), mean(u0) outside [-1.6, 1.8], > 6 % energy above k = 16 | accepted **with a warning** |
+| model produces non-finite output | 422 |
+
+## Setup
+
+Requires Python >= 3.10 (developed on 3.14; the Docker image uses 3.12).
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements-dev.txt && pip install -e .
+
+# data (~100 MB via range requests) and checks
+python scripts/download_subset.py --nu 0.1
+python scripts/verify_download.py --file data/pdebench/burgers_nu0.1_n1200_stride10.h5 \
+       --probe data/probe/probe_268185.h5        # probe from scripts/inspect_remote_hdf5.py --file-id 268185
+python scripts/validate_solver.py --file data/pdebench/burgers_nu0.1_n1200_stride10.h5
+
+# train (~20 min on a 2-core laptop CPU) -> artifacts/
+python -m pde_service.training.train --nu 0.1
+
+# run
+uvicorn pde_service.api.app:app --port 8000      # open http://localhost:8000
+pytest
+```
+
+The trained checkpoint, held-out test samples and metrics in `artifacts/` are committed,
+so the app runs without downloading data or training.
+
+### Docker / Render
+
+```bash
+docker build -t burgers-fno . && docker run -p 8000:8000 -e PORT=8000 burgers-fno
+```
+
+On Render: new Web Service from this repo, environment "Docker". Render sets `PORT`.
+
+## Tests
+
+* Unit: FNO shapes, resolution independence, mean conservation; solver vs exact
+  Cole-Hopf, mean conservation, invalid inputs; byte-offset arithmetic; metrics; split
+  disjointness.
+* Data (skipped if data not downloaded): solver vs PDEBench.
+* Integration: full API on an **untrained** fixture checkpoint (validation, status codes,
+  shapes; no accuracy claims).
+* **Synthetic smoke test** of the training pipeline (solver-generated data, labelled
+  `SYNTHETIC SMOKE TEST`; says nothing about accuracy).
+
+## Layout
+
+```
+configs/default.yaml        all settings (data, model, training, API limits)
+src/pde_service/
+  data/        download.py (range requests), dataset.py (split, tensors)
+  models/      fno.py
+  solver/      burgers.py (reference solver)
+  training/    train.py (train + one-shot test evaluation)
+  inference/   predictor.py (validation + prediction), initial_conditions.py
+  api/         app.py (FastAPI), schemas.py (pydantic)
+  metrics.py
+frontend/                   index.html, style.css, app.js (Plotly via CDN)
+scripts/                    inspection, download, verification, solver validation, controls
+artifacts/                  checkpoint, test samples, metrics, validation reports
+tests/
+```
+
+## References
+
+* Takamoto et al., *PDEBench: An Extensive Benchmark for Scientific Machine Learning*, NeurIPS 2022 Datasets & Benchmarks.
+* Li et al., *Fourier Neural Operator for Parametric Partial Differential Equations*, ICLR 2021.

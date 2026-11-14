@@ -43,8 +43,11 @@ training:
 
 api:
   supported_nu: [0.1]
-  # Input checks (values set from the training-data statistics, see README):
-  max_abs_u0: 3.0           # PLACEHOLDER until data stats are computed; above -> rejected (HTTP 422)
-  ood_k_cut: 8              # PLACEHOLDER; energy above this wavenumber is unusual for training ICs
-  ood_energy_fraction: 0.05 # PLACEHOLDER; more than this fraction above ood_k_cut -> warning
+  # Input checks, from scripts/data_stats.py on the 900 nu=0.1 TRAINING initial conditions:
+  #   max|u0|: max 3.14, p99 2.39 | mean(u0) in [-1.56, 1.79] | energy above k=16: max 5.1%, p99 1.1%
+  max_abs_u0: 3.2           # above -> rejected (HTTP 422): outside the training amplitude range
+  warn_abs_u0: 2.4          # above -> warning: only ~1% of training ICs are this large
+  mean_range: [-1.6, 1.8]   # outside -> warning: the mean sets the advection speed
+  ood_k_cut: 16             # = FNO Fourier modes
+  ood_energy_fraction: 0.06 # more energy than this above ood_k_cut -> warning
   log_level: INFO
