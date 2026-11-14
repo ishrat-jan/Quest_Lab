@@ -1,0 +1,46 @@
+# All tunable settings live here; code reads them via pde_service.config.
+
+data:
+  # PDEBench 1D Burgers on DaRUS (doi:10.18419/darus-2986). File ids per viscosity.
+  darus_file_ids:
+    "0.1": 268185
+    "0.01": 281363
+  # Layout verified with scripts/inspect_remote_hdf5.py (contiguous float32 '<f4'):
+  tensor_offset: 2048
+  n_samples_total: 10000
+  n_time_total: 201         # tensor time index k <-> t = 0.01 * k  (t-coordinate has one extra entry)
+  n_x: 1024
+  dt: 0.01
+  time_stride: 10           # keep k = 0, 10, ..., 200 -> t = 0.0, 0.1, ..., 2.0
+  n_samples: 1200           # first N samples of the file are downloaded
+  local_dir: data/pdebench
+  split:                    # by sample index, fixed seed, disjoint
+    train: 900
+    val: 100
+    test: 200
+    seed: 0
+
+model:
+  modes: 16
+  width: 64
+  n_layers: 4
+  grid_size: 256            # spatial downsampling of the 1024 grid for training (stride 4)
+
+training:
+  epochs: 300
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 1.0e-4
+  scheduler_step: 100
+  scheduler_gamma: 0.5
+  seed: 0
+  threads: 2
+  run_dir: runs
+  artifact_dir: artifacts
+
+api:
+  supported_nu: [0.1]
+  n_x_allowed: [256]        # FNO input grid; other lengths are rejected (or resampled by the client)
+  max_abs_u0: 3.0           # beyond the PDEBench training range -> rejected
+  max_points_solver: 1024
+  log_level: INFO

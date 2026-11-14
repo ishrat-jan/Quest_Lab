@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# Data (downloaded from PDEBench/DaRUS; re-create with scripts/download_subset.py)
+data/
+
+# Large training outputs (the small final checkpoint + metrics in artifacts/ are committed)
+runs/
+*.log
