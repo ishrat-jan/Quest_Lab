@@ -114,6 +114,7 @@ def info(request: Request):
             "t_out": [0.0, *p.t_out.tolist()],
             "n_test_samples": 0 if p.test is None else len(p.test["u"]),
             "max_abs_u0": p.max_abs_u0,
+            "reliable_t_max": p.reliable_t_max,
             "checkpoint": p.meta,
             "test_metrics": None if metrics is None else {
                 "label": metrics["label"],

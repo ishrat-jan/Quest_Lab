@@ -80,6 +80,7 @@ def test_predict_user_ic_with_solver(client):
     assert np.array(d["solver"]).shape == (K + 1, N)
     assert set(d["metrics_vs_solver"]) == {"mse", "rmse", "rel_l2"}
     assert d["source"] == {"type": "user"}
+    assert d["reliable_t_max"] == 1.0
     np.testing.assert_allclose(d["fno"][0], smooth_u0())  # row 0 is the given IC
 
 

@@ -50,4 +50,9 @@ api:
   mean_range: [-1.6, 1.8]   # outside -> warning: the mean sets the advection speed
   ood_k_cut: 16             # = FNO Fourier modes
   ood_energy_fraction: 0.06 # more energy than this above ood_k_cut -> warning
+  # Supported time window per nu: largest output time where the FNO's fluctuation rel. L2 vs
+  # PDEBench on the held-out test split is <= 5% (scripts/error_vs_time.py). Later snapshots
+  # are still returned but flagged as low confidence.
+  reliable_t_max:
+    "0.1": 1.0
   log_level: INFO

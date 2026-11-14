@@ -47,6 +47,7 @@ class Predictor:
         self.max_abs_u0 = float(limits["max_abs_u0"])
         self.warn_abs_u0 = float(limits["warn_abs_u0"])
         self.mean_range = tuple(limits["mean_range"])
+        self.reliable_t_max = float(limits["reliable_t_max"][f"{self.nu:g}"])
         self.k_cut = int(limits["ood_k_cut"])
         self.ood_energy = float(limits["ood_energy_fraction"])
         self.test = None
@@ -121,6 +122,7 @@ class Predictor:
             "t": [0.0, *self.t_out.tolist()],
             "u0": u0.tolist(),
             "fno": [u0.tolist(), *pred.tolist()],  # row 0 is the given initial condition
+            "reliable_t_max": self.reliable_t_max,  # later snapshots: low confidence
             "timing_ms": {"fno": round(fno_ms, 2)},
             "warnings": warnings,
         }

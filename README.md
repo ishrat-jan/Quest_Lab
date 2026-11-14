@@ -24,7 +24,7 @@ assumed**: our own solver reproduces stored PDEBench trajectories only with `D =
 | | |
 |---|---|
 | Input  | `(B, 256, 2)` = `[u(x, 0), x]` on the grid `x_j = (j + 0.5) / 256` |
-| Output | `(B, 256, 10)` = `u(x, t)` at `t = 0.2, 0.4, ..., 2.0` |
+| Output | `(B, 256, 10)` = `u(x, t)` at `t = 0.2, 0.4, ..., 2.0`; **supported window t <= 1.0** (later times low confidence, see Results) |
 | Viscosity | **one model per nu**; only `nu = 0.1` is trained. Other values are rejected (HTTP 422). |
 | Architecture | FNO1d: lift -> 4 x (spectral conv on 16 lowest Fourier modes + pointwise conv) -> projection; 551k real parameters |
 | Physics constraint | the spatial mean of each output is set to mean(u0) (exact conservation law of periodic Burgers) |
@@ -77,8 +77,10 @@ diffusion, but convection (steepening) sets the rate.
 **Known limitation of the comparison:** ~96 % of the fluctuation energy is gone by t = 0.5.
 The stored PDEBench fields also contain small (~5e-4) ripples that do not decay, most
 likely an artefact of PDEBench's own numerical scheme (observed, cause not verified). As a
-result, relative errors on the late-time fluctuation have a floor of a few percent even
-for the reference solver (7 % at t = 2).
+result, relative errors on the late-time fluctuation are a few percent even for the
+reference solver (5.4 % at t = 2 on the 200 test simulations; 6.9 % on the 30-sample check).
+The excess ripple in PDEBench is small: RMS of modes k >= 3 is 1.1e-4 at t = 2 vs 4.9e-5 in
+the solver.
 
 ## Results (real PDEBench, held-out test split)
 
@@ -106,10 +108,38 @@ Interpretation:
 * The FNO clearly learned the dynamics: ~55x lower relative L2 than the mean-only baseline.
 * It is ~50x less accurate than the numerical solver at early times; it is ~8x faster
   (16 ms vs 135 ms per prediction on the 256 grid). That is the surrogate trade-off.
-* At late times part of the error is the data floor described above.
+* The late-time growth of the relative error is mostly the signal fading, not the error
+  growing; but the late-time error is the FNO's own, not the data floor (see below).
 * Generalisation gap: final train MSE ~1.7e-6 vs test MSE 9.1e-6 (mild overfitting).
 * Out-of-distribution example: a k = 24 initial condition triggers the API warning and
   the FNO is 38 % off the solver. The warning is warranted.
+
+### Supported time window (nu = 0.1): t <= 1.0
+
+`scripts/error_vs_time.py` (200 test simulations, `artifacts/error_vs_time_nu0.1.json`):
+
+| t | 0.2 | 0.6 | 1.0 | 1.4 | 2.0 |
+|---|---|---|---|---|---|
+| RMS of true fluctuation (PDEBench) | 0.235 | 0.112 | 0.062 | 0.036 | 0.017 |
+| RMSE FNO vs PDEBench | 4.9e-3 | 2.8e-3 | 2.7e-3 | 2.7e-3 | 2.0e-3 |
+| RMSE FNO vs solver | 4.9e-3 | 2.9e-3 | 2.7e-3 | 2.8e-3 | 2.1e-3 |
+| RMSE solver vs PDEBench | 1.2e-4 | 5.0e-4 | 6.2e-4 | 6.0e-4 | 9.0e-4 |
+| Fluct. rel. L2 FNO vs PDEBench | 2.1 % | 2.5 % | 4.3 % | 7.5 % | 11.9 % |
+| Ripple RMS (modes k >= 3): PDEBench / FNO / solver | 3.6e-2 / 3.6e-2 / 3.6e-2 | 8.9e-3 / 8.7e-3 / 8.8e-3 | 2.1e-3 / 2.0e-3 / 2.1e-3 | 4.7e-4 / 7.6e-4 / 4.7e-4 | 1.1e-4 / 6.2e-4 / 4.9e-5 |
+
+* The FNO's **absolute** error is roughly flat (2-5e-3) while the true fluctuation decays
+  14x, so the **relative** error grows from 2 % to 12 %. Most of that growth is the
+  denominator, but the error stops decreasing after t ~ 0.6 while the signal keeps decaying.
+* The late-time error belongs to the FNO: the FNO is equally far from PDEBench and from
+  the solver, while the solver and PDEBench agree 2-40x more closely.
+* About 90 % of the FNO's late error energy is in the large-scale modes k = 1-2; ~10 % is
+  a non-decaying ripple (k >= 3, ~6e-4 RMS, 13x the physical level at t = 2).
+* k >= 3 content is *not* unphysical up to t ~ 1.2: nonlinear harmonics keep it alive, and
+  PDEBench, FNO and solver agree there.
+* **Window rule:** the largest output time with fluctuation rel. L2 <= 5 % vs PDEBench, i.e.
+  **t <= 1.0**. Later snapshots are still returned, with `reliable_t_max` in the API
+  response; the UI draws the boundary on the heatmaps and labels later slices as low
+  confidence.
 
 History notes, for transparency: (1) the per-simulation statistics were first computed
 with a bug (a single field passed without a sample axis); fixed and recomputed from the

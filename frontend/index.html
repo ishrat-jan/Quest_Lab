@@ -117,9 +117,13 @@
         <li>Input must be on the model grid (N points, periodic). Amplitudes above the training range are rejected.</li>
         <li>Initial conditions unlike the training distribution (sharp or high-frequency) are accepted with a warning;
           the FNO error can then be large, so check the solver comparison.</li>
-        <li>At &nu; = 0.1 about 96% of the fluctuation energy has dissipated by t = 0.5, so late-time fields are
-          nearly constant. Relative errors on the remaining small fluctuations are large even for the reference
-          solver (~7% at t = 2 vs PDEBench), so late-time comparisons have a floor of a few percent.</li>
+        <li><b>Supported time window (&nu; = 0.1): t &le; 1.0.</b> There the FNO's error on the evolving part of
+          the solution is &le; 5% (held-out test). Later snapshots are shown but marked low confidence: the solution
+          decays towards its mean (RMS fluctuation 0.235 at t = 0.2, 0.017 at t = 2) while the FNO's absolute error
+          stays at ~2&times;10<sup>&minus;3</sup>, so its relative error grows to ~12% at t = 2. The reference
+          solver and PDEBench agree 2&ndash;40&times; more closely than the FNO does, so this late-time error is the
+          model's, not the data's. About 90% of it is in the large-scale modes; the FNO also shows a small
+          non-decaying ripple (~6&times;10<sup>&minus;4</sup> RMS) that the true solution does not have.</li>
         <li>Outputs exist only at the trained snapshot times. The model knows nothing about other boundary conditions or domains.</li>
       </ul>
     </div>

@@ -124,12 +124,21 @@ function sequentialScale() {
 }
 
 function heatmap(el, title, x, t, z, opts) {
+  const layout = baseLayout(title, "x", "t");
+  if (opts.tMax !== undefined && opts.tMax < t.at(-1)) {
+    // supported time window: snapshots above the line are low confidence
+    layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: opts.tMax, y1: opts.tMax,
+                       line: { color: css("--ink"), width: 1.5, dash: "dash" } }];
+    layout.annotations = [{ xref: "paper", x: 0.01, y: opts.tMax, yanchor: "bottom", xanchor: "left",
+                            text: `supported t ≤ ${opts.tMax}; above: low confidence`, showarrow: false,
+                            font: { size: 10, color: css("--ink") }, bgcolor: css("--surface") }];
+  }
   const trace = {
     type: "heatmap", x, y: t, z, colorscale: opts.scale, zmin: opts.zmin, zmax: opts.zmax,
     hovertemplate: `x=%{x:.3f}<br>t=%{y:.2f}<br>${opts.label}=%{z:.4f}<extra></extra>`,
     colorbar: { title: { text: opts.label, side: "right" }, thickness: 10, outlinewidth: 0 },
   };
-  Plotly.react(el, [trace], baseLayout(title, "x", "t"), plotConfig);
+  Plotly.react(el, [trace], layout, plotConfig);
 }
 
 function plotIC(x, u0) {
@@ -149,7 +158,7 @@ function referenceOf(r) {
 function plotResults(r) {
   const all = [r.fno, r.pdebench_reference, r.solver].filter(Boolean).flat(2);
   const lim = Math.max(...all.map(Math.abs)) || 1;
-  const div = { scale: divergingScale(), zmin: -lim, zmax: lim, label: "u" };
+  const div = { scale: divergingScale(), zmin: -lim, zmax: lim, label: "u", tMax: r.reliable_t_max };
   heatmap("hm-fno", "FNO prediction u(x, t)", r.x, r.t, r.fno, div);
 
   const ref = referenceOf(r);
@@ -158,7 +167,7 @@ function plotResults(r) {
     const err = r.fno.map((row, i) => row.map((v, j) => Math.abs(v - ref.z[i][j])));
     const emax = Math.max(...err.flat()) || 1e-12;
     heatmap("hm-err", `|FNO − ${ref.name}|`, r.x, r.t, err,
-            { scale: sequentialScale(), zmin: 0, zmax: emax, label: "|err|" });
+            { scale: sequentialScale(), zmin: 0, zmax: emax, label: "|err|", tMax: r.reliable_t_max });
   } else {
     Plotly.purge("hm-ref"); Plotly.purge("hm-err");
   }
@@ -172,14 +181,16 @@ function plotSlice() {
   const r = state.result;
   if (!r) return;
   const k = Number($("t-slider").value);
-  $("t-label").textContent = `t = ${r.t[k].toFixed(2)}`;
+  const outside = r.t[k] > r.reliable_t_max + 1e-9;
+  $("t-label").textContent = `t = ${r.t[k].toFixed(2)}` +
+    (outside ? ` (outside supported window t ≤ ${r.reliable_t_max}: low confidence)` : "");
   const traces = [{ x: r.x, y: r.fno[k], name: "FNO", mode: "lines", line: { color: css("--s1"), width: 2 } }];
   if (r.pdebench_reference) traces.push({ x: r.x, y: r.pdebench_reference[k], name: "PDEBench reference",
     mode: "lines", line: { color: css("--s2"), width: 2, dash: "dash" } });
   if (r.solver) traces.push({ x: r.x, y: r.solver[k], name: "Reference solver",
     mode: "lines", line: { color: css("--s3"), width: 2, dash: "dot" } });
   traces.forEach((tr) => { tr.hovertemplate = `${tr.name}: %{y:.4f}<extra></extra>`; });
-  const layout = baseLayout(`Solution at t = ${r.t[k].toFixed(2)}`, "x", "u");
+  const layout = baseLayout(`Solution at t = ${r.t[k].toFixed(2)}${outside ? " (low confidence)" : ""}`, "x", "u");
   layout.hovermode = "x unified";
   Plotly.react("slice", traces, layout, plotConfig);
 }
@@ -294,8 +305,8 @@ function renderInfo(info) {
     $("run").disabled = $("preview").disabled = true;
     return;
   }
-  $("nu-hint").textContent = `Grid N = ${m.grid_size}, outputs at ${m.t_out.length - 1} times up to t = ${m.t_out.at(-1)}. ` +
-    `Supported |u₀| ≤ ${m.max_abs_u0}.`;
+  $("nu-hint").textContent = `Grid N = ${m.grid_size}, outputs at ${m.t_out.length - 1} times up to t = ${m.t_out.at(-1)}; ` +
+    `supported time window t ≤ ${m.reliable_t_max}. Supported |u₀| ≤ ${m.max_abs_u0}.`;
   $("test-index").max = Math.max(0, m.n_test_samples - 1);
   $("custom-values").placeholder = `exactly ${m.grid_size} numbers on x_j = (j + 0.5)/${m.grid_size}`;
   const tm = m.test_metrics;
