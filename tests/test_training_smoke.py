@@ -33,7 +33,7 @@ def write_synthetic(path, n_samples=24, n_x=128, nu=0.1):
 
 def test_pipeline_runs_end_to_end(tmp_path):
     cfg = copy.deepcopy(load_config())
-    cfg["data"].update(local_dir=str(tmp_path), n_samples=24, time_stride=50,
+    cfg["data"].update(local_dir=str(tmp_path), n_samples=24, time_stride=50, output_stride=1,
                        split={"train": 16, "val": 4, "test": 4, "seed": 0})
     cfg["model"].update(grid_size=64, modes=8, width=16)
     cfg["training"].update(batch_size=8, run_dir=str(tmp_path / "runs"), artifact_dir=str(tmp_path / "art"))
@@ -44,6 +44,8 @@ def test_pipeline_runs_end_to_end(tmp_path):
     assert report["label"] == "SYNTHETIC SMOKE TEST"
     assert report["split_sizes"] == {"train": 16, "val": 4, "test": 4}
     assert len(report["test"]["per_time"]) == 4
+    assert report["split_overlap"] == {"train&val": 0, "train&test": 0, "val&test": 0}
+    assert "mean_baseline" in report["test"]
     assert np.isfinite(report["test"]["overall"]["rel_l2"])
     saved = json.loads((tmp_path / "art" / "metrics_nu0.1.json").read_text())
     assert saved["label"] == "SYNTHETIC SMOKE TEST"

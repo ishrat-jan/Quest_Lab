@@ -26,3 +26,10 @@ def test_gradients_flow():
     m = FNO1d(modes=4, width=8, n_layers=2, out_channels=3)
     m(torch.randn(2, 32, 2)).sum().backward()
     assert all(p.grad is not None for p in m.parameters())
+
+
+def test_conserve_mean_matches_input_mean_exactly():
+    m = FNO1d(modes=4, width=8, n_layers=2, out_channels=3, conserve_mean=True)
+    x = torch.randn(2, 32, 2)
+    out = m(x)
+    torch.testing.assert_close(out.mean(dim=1), x[..., 0].mean(dim=1, keepdim=True).expand(2, 3))

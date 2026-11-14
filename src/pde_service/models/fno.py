@@ -7,6 +7,10 @@ Shapes (B = batch, N = spatial grid points, K = number of output time snapshots)
 The model is a learned map from the initial condition to the solution at fixed
 times, for ONE fixed viscosity (the one it was trained on). It assumes a
 periodic, uniform grid on [0, 1), as in PDEBench 1D Burgers.
+
+conserve_mean=True enforces the exact conservation law of periodic Burgers,
+mean_x u(x, t) = mean_x u(x, 0), by shifting each output snapshot's mean to the
+input's mean (input channel 0 must be u0).
 """
 
 from __future__ import annotations
@@ -47,8 +51,10 @@ class FNO1d(nn.Module):
         n_layers: int = 4,
         in_channels: int = 2,
         out_channels: int = 1,
+        conserve_mean: bool = False,
     ):
         super().__init__()
+        self.conserve_mean = conserve_mean
         self.lift = nn.Linear(in_channels, width)
         self.spectral = nn.ModuleList(SpectralConv1d(width, width, modes) for _ in range(n_layers))
         self.pointwise = nn.ModuleList(nn.Conv1d(width, width, 1) for _ in range(n_layers))
@@ -62,7 +68,11 @@ class FNO1d(nn.Module):
             h = spec(h) + pw(h)
             if i != last:
                 h = self.act(h)
-        return self.project(h.permute(0, 2, 1))  # (B, N, out_channels)
+        out = self.project(h.permute(0, 2, 1))  # (B, N, out_channels)
+        if self.conserve_mean:
+            u0_mean = x[..., :1].mean(dim=1, keepdim=True)  # (B, 1, 1)
+            out = out - out.mean(dim=1, keepdim=True) + u0_mean
+        return out
 
 
 def count_parameters(model: nn.Module) -> int:

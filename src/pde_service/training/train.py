@@ -22,7 +22,7 @@ import torch
 
 from pde_service.config import load_config, resolve
 from pde_service.data.dataset import BurgersData, load_burgers
-from pde_service.metrics import all_metrics, rel_l2
+from pde_service.metrics import all_metrics, fluctuation_rel_l2, rel_l2
 from pde_service.models.fno import FNO1d, count_parameters
 
 log = logging.getLogger(__name__)
@@ -39,16 +39,29 @@ def predict(model: torch.nn.Module, inputs: torch.Tensor, batch: int = 64) -> np
     return torch.cat([model(inputs[i : i + batch]) for i in range(0, len(inputs), batch)]).numpy()
 
 
+def scored(pred: np.ndarray, ref: np.ndarray, u0: np.ndarray) -> dict:
+    """pred/ref (S, n, K) or (S, n); u0 (S, n)."""
+    p = pred if pred.ndim == 2 else pred.transpose(0, 2, 1)  # put x last for the fluctuation metric
+    r = ref if ref.ndim == 2 else ref.transpose(0, 2, 1)
+    return all_metrics(pred, ref) | {"fluct_rel_l2": fluctuation_rel_l2(p, r, u0)}
+
+
 def evaluate(model: torch.nn.Module, data: BurgersData) -> dict:
-    """Metrics on the held-out test split. pred/ref are (S, n, K)."""
+    """Metrics on the held-out test split, for the FNO and for the trivial baseline
+    u(x, t) = mean(u0) (exact conservation, no dynamics). pred/ref are (S, n, K)."""
     pred = predict(model, data.test.inputs)
     ref = data.test.targets.numpy()
+    u0 = data.test.inputs[..., 0].numpy()
+    baseline = np.broadcast_to(u0.mean(axis=1)[:, None, None], ref.shape)
     per_time = [
-        {"t": float(t), **all_metrics(pred[..., k], ref[..., k])} for k, t in enumerate(data.t_out)
+        {"t": float(t), "fno": scored(pred[..., k], ref[..., k], u0),
+         "mean_baseline": scored(baseline[..., k], ref[..., k], u0)}
+        for k, t in enumerate(data.t_out)
     ]
     per_sample = [rel_l2(pred[i], ref[i]) for i in range(len(pred))]
     return {
-        "overall": all_metrics(pred, ref),
+        "overall": scored(pred, ref, u0),
+        "mean_baseline": scored(baseline, ref, u0),
         "per_time": per_time,
         "per_sample_rel_l2": {
             "median": float(np.median(per_sample)),
@@ -69,12 +82,24 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
     files = glob.glob(pattern)
     if not files:
         raise FileNotFoundError(f"{pattern} not found; run scripts/download_subset.py --nu {nu}")
-    data = load_burgers(Path(files[0]), mcfg["grid_size"], dcfg["split"])
+    data = load_burgers(Path(files[0]), mcfg["grid_size"], dcfg["split"], dcfg.get("output_stride", 1))
     k_out = len(data.t_out)
     log.info("train %s val %s test %s | n=%d K=%d", tuple(data.train.inputs.shape),
              tuple(data.val.inputs.shape), tuple(data.test.inputs.shape), len(data.x), k_out)
 
-    model = FNO1d(mcfg["modes"], mcfg["width"], mcfg["n_layers"], in_channels=2, out_channels=k_out)
+    overlap = {
+        "train&val": len(set(data.train.indices) & set(data.val.indices)),
+        "train&test": len(set(data.train.indices) & set(data.test.indices)),
+        "val&test": len(set(data.val.indices) & set(data.test.indices)),
+    }
+    log.info("split by whole simulation (seed %d): overlap %s", dcfg["split"]["seed"], overlap)
+    if any(overlap.values()):
+        raise RuntimeError(f"data leakage: split overlap {overlap}")
+
+    model_kwargs = {"modes": mcfg["modes"], "width": mcfg["width"], "n_layers": mcfg["n_layers"],
+                    "in_channels": 2, "out_channels": k_out, "conserve_mean": mcfg.get("conserve_mean", False)}
+    model = FNO1d(**model_kwargs)
+    loss_fn = {"mse": torch.nn.functional.mse_loss, "rel_l2": rel_l2_loss}[tcfg.get("loss", "rel_l2")]
     log.info("FNO parameters: %d", count_parameters(model))
     opt = torch.optim.AdamW(model.parameters(), lr=tcfg["lr"], weight_decay=tcfg["weight_decay"])
     sched = torch.optim.lr_scheduler.StepLR(opt, tcfg["scheduler_step"], tcfg["scheduler_gamma"])
@@ -95,20 +120,19 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
         for i in range(0, len(x_tr), tcfg["batch_size"]):
             b = perm[i : i + tcfg["batch_size"]]
             opt.zero_grad()
-            loss = rel_l2_loss(model(x_tr[b]), y_tr[b])
+            loss = loss_fn(model(x_tr[b]), y_tr[b])
             loss.backward()
             opt.step()
             total += loss.item() * len(b)
         sched.step()
         val = rel_l2(predict(model, data.val.inputs), data.val.targets.numpy())
-        history.append({"epoch": epoch, "train_rel_l2": total / len(x_tr), "val_rel_l2": val})
+        history.append({"epoch": epoch, "train_loss": total / len(x_tr), "val_rel_l2": val})
         if val < best_val:
             best_val = val
             torch.save(
                 {
                     "state_dict": model.state_dict(),
-                    "model": {"modes": mcfg["modes"], "width": mcfg["width"], "n_layers": mcfg["n_layers"],
-                              "in_channels": 2, "out_channels": k_out},
+                    "model": model_kwargs,
                     "nu": data.nu,
                     "x": data.x.tolist(),
                     "t_out": data.t_out.tolist(),
@@ -120,8 +144,8 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
                 ckpt_path,
             )
         if epoch % 10 == 0 or epoch == 1:
-            log.info("epoch %4d  train %.4e  val %.4e  best %.4e  (%.0fs)", epoch,
-                     history[-1]["train_rel_l2"], val, best_val, time.time() - t_start)
+            log.info("epoch %4d  train loss %.4e  val rel L2 %.4e  best %.4e  (%.0fs)", epoch,
+                     history[-1]["train_loss"], val, best_val, time.time() - t_start)
         (run_dir / "history.json").write_text(json.dumps(history))
 
     # held-out test evaluation, once, with the best-on-validation checkpoint
@@ -131,6 +155,8 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
         "label": label or "REAL RESULT - PDEBench 1D Burgers held-out test split",
         "nu": data.nu,
         "data_file": Path(files[0]).name,
+        "split_overlap": overlap,
+        "loss": tcfg.get("loss", "rel_l2"),
         "split_sizes": {"train": len(data.train.indices), "val": len(data.val.indices),
                         "test": len(data.test.indices)},
         "test_sample_indices": data.test.indices.tolist(),

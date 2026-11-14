@@ -13,6 +13,7 @@ data:
   dt: 0.01
   time_stride: 10           # keep k = 0, 10, ..., 200 -> t = 0.0, 0.1, ..., 2.0
   n_samples: 1200           # first N samples of the file are downloaded
+  output_stride: 2          # of the downloaded times, predict every 2nd -> t = 0.2, 0.4, ..., 2.0 (K = 10)
   local_dir: data/pdebench
   split:                    # by sample index, fixed seed, disjoint
     train: 900
@@ -25,10 +26,12 @@ model:
   width: 64
   n_layers: 4
   grid_size: 256            # spatial downsampling of the 1024 grid for training (stride 4)
+  conserve_mean: true       # hard constraint: mean_x u(t) = mean_x u0 (exact for periodic Burgers)
 
 training:
   epochs: 300
   batch_size: 32
+  loss: mse                 # with conserve_mean, MSE acts on the fluctuations only; see README
   lr: 0.001
   weight_decay: 1.0e-4
   scheduler_step: 100

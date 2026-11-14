@@ -110,7 +110,7 @@
       <h3>Validation</h3>
       <p><b>PDEBench test samples</b> are compared with the true held-out PDEBench solution.
         <b>Your own inputs</b> have no stored answer, so they are compared with an independent pseudo-spectral solver
-        (exact diffusion, RK4, 2/3 dealiasing), which matches PDEBench to ~0.05% relative L2 at &nu; = 0.1.</p>
+        (exact diffusion, RK4, 2/3 dealiasing). It was validated against 30 stored PDEBench trajectories at &nu; = 0.1: mean relative L2 &asymp; 1&times;10<sup>&minus;3</sup>, max absolute error &le; 5&times;10<sup>&minus;3</sup> (the alternative equation form D = &nu; is ~130&times; worse, so the PDE convention is confirmed).</p>
       <h3>Limitations</h3>
       <ul>
         <li>Only the trained viscosity values are accepted; others are rejected, not extrapolated.</li>
