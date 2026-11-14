@@ -20,6 +20,7 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=16)
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per range request otherwise
 
     time_indices = list(range(0, cfg["n_time_total"], cfg["time_stride"]))
     out = resolve(cfg["local_dir"]) / f"burgers_nu{args.nu}_n{args.n_samples}_stride{cfg['time_stride']}.h5"

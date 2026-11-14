@@ -40,7 +40,8 @@ training:
 
 api:
   supported_nu: [0.1]
-  n_x_allowed: [256]        # FNO input grid; other lengths are rejected (or resampled by the client)
-  max_abs_u0: 3.0           # beyond the PDEBench training range -> rejected
-  max_points_solver: 1024
+  # Input checks (values set from the training-data statistics, see README):
+  max_abs_u0: 3.0           # PLACEHOLDER until data stats are computed; above -> rejected (HTTP 422)
+  ood_k_cut: 8              # PLACEHOLDER; energy above this wavenumber is unusual for training ICs
+  ood_energy_fraction: 0.05 # PLACEHOLDER; more than this fraction above ood_k_cut -> warning
   log_level: INFO

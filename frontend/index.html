@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Burgers FNO Service</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1>PDE Solutions as a Service</h1>
+  <p class="sub">1D viscous Burgers equation &middot; Fourier Neural Operator trained on PDEBench &middot;
+    independent spectral reference solver</p>
+</header>
+
+<main class="layout">
+  <section class="panel controls" aria-labelledby="cfg-h">
+    <h2 id="cfg-h">Configuration</h2>
+
+    <label class="field">Viscosity &nu;
+      <select id="nu"></select>
+    </label>
+    <p class="hint" id="nu-hint">Loading model information&hellip;</p>
+
+    <fieldset class="field">
+      <legend>Initial condition u(x, 0)</legend>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-ic="pdebench_test" aria-selected="true">PDEBench test</button>
+        <button type="button" role="tab" data-ic="sines" aria-selected="false">Sine sum</button>
+        <button type="button" role="tab" data-ic="gaussian" aria-selected="false">Gaussian</button>
+        <button type="button" role="tab" data-ic="custom" aria-selected="false">Custom</button>
+      </div>
+
+      <div class="ic-form" data-form="pdebench_test">
+        <label>Held-out test sample <input id="test-index" type="number" min="0" value="0"></label>
+        <p class="hint">Never seen in training. The true PDEBench solution is shown for comparison.</p>
+      </div>
+
+      <div class="ic-form" data-form="sines" hidden>
+        <p class="hint">u&#8320;(x) = &Sigma; A&#7522; sin(2&pi;k&#7522;x + &phi;&#7522;), integer k (periodic domain).</p>
+        <div id="sine-terms"></div>
+        <button type="button" id="add-term" class="ghost">+ add term</button>
+      </div>
+
+      <div class="ic-form" data-form="gaussian" hidden>
+        <label>Amplitude <input id="g-amp" type="number" step="0.1" value="1"></label>
+        <label>Centre <input id="g-center" type="number" step="0.05" min="0" max="1" value="0.5"></label>
+        <label>Width <input id="g-width" type="number" step="0.01" min="0.01" max="0.5" value="0.1"></label>
+      </div>
+
+      <div class="ic-form" data-form="custom" hidden>
+        <label>Values (comma / space / newline separated)
+          <textarea id="custom-values" rows="5" placeholder="exactly N numbers on x_j = (j + 0.5)/N"></textarea>
+        </label>
+        <p class="hint" id="custom-count"></p>
+      </div>
+    </fieldset>
+
+    <label class="check"><input id="run-solver" type="checkbox" checked> Also run reference solver (validation)</label>
+
+    <div class="actions">
+      <button type="button" id="preview" class="ghost">Preview u&#8320;</button>
+      <button type="button" id="run" class="primary">Predict</button>
+    </div>
+
+    <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+    <div id="ic-plot" class="plot small" aria-label="Initial condition preview"></div>
+  </section>
+
+  <section class="panel results" aria-labelledby="res-h">
+    <div class="res-head">
+      <h2 id="res-h">Results</h2>
+      <div class="downloads">
+        <button type="button" id="dl-json" class="ghost" disabled>Download JSON</button>
+        <button type="button" id="dl-csv" class="ghost" disabled>Download CSV</button>
+      </div>
+    </div>
+    <p id="empty" class="hint">Choose an initial condition and press <b>Predict</b>.</p>
+    <div id="warnings" class="warnings" hidden></div>
+    <div id="tiles" class="tiles"></div>
+    <div class="grid-plots">
+      <div id="hm-fno" class="plot"></div>
+      <div id="hm-ref" class="plot"></div>
+      <div id="hm-err" class="plot"></div>
+      <div class="slice-wrap">
+        <div id="slice" class="plot"></div>
+        <label class="slider" id="slider-wrap" hidden>Time slice <input id="t-slider" type="range" min="0" max="20" value="20"> <output id="t-label"></output></label>
+      </div>
+    </div>
+  </section>
+</main>
+
+<section class="panel about" aria-labelledby="about-h">
+  <h2 id="about-h">About the PDE, the model and its limits</h2>
+  <div class="cols">
+    <div>
+      <h3>Equation</h3>
+      <p>&part;<sub>t</sub>u + &part;<sub>x</sub>(u&sup2;/2) = (&nu;/&pi;) &part;<sub>xx</sub>u,
+        x &isin; [0,1) periodic, t &isin; [0, 2]. The nonlinear term steepens waves into fronts; viscosity smooths them.
+        This is the PDEBench convention (diffusion coefficient &nu;/&pi;), which we verified by reproducing PDEBench
+        trajectories with our own solver.</p>
+      <h3>Model</h3>
+      <p>A Fourier Neural Operator maps u(x,0) on a 256-point grid directly to u(x,t) at t = 0.1, 0.2, &hellip;, 2.0.
+        It was trained on a subset of the official PDEBench 1D Burgers data for a single viscosity.</p>
+      <div id="metrics-info" class="hint">Loading test metrics&hellip;</div>
+    </div>
+    <div>
+      <h3>Validation</h3>
+      <p><b>PDEBench test samples</b> are compared with the true held-out PDEBench solution.
+        <b>Your own inputs</b> have no stored answer, so they are compared with an independent pseudo-spectral solver
+        (exact diffusion, RK4, 2/3 dealiasing), which matches PDEBench to ~0.05% relative L2 at &nu; = 0.1.</p>
+      <h3>Limitations</h3>
+      <ul>
+        <li>Only the trained viscosity values are accepted; others are rejected, not extrapolated.</li>
+        <li>Input must be on the model grid (N points, periodic). Amplitudes above the training range are rejected.</li>
+        <li>Initial conditions unlike the training distribution (sharp or high-frequency) are accepted with a warning;
+          the FNO error can then be large, so check the solver comparison.</li>
+        <li>Outputs exist only at the trained snapshot times. The model knows nothing about other boundary conditions or domains.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+<footer class="foot">Data: PDEBench (Takamoto et al., 2022), DaRUS doi:10.18419/darus-2986. FNO: Li et al., 2021.</footer>
+</body>
+</html>

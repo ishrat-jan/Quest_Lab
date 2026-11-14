@@ -1,0 +1,9 @@
+# Runtime (API + training). torch is installed separately from the CPU wheel index:
+#   pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+numpy==2.5.4
+h5py==3.16.0
+fastapi==0.162.7
+uvicorn==0.54.0
+pydantic==2.14.3
+PyYAML==6.0.3
+httpx==0.28.1
