@@ -58,7 +58,7 @@ def evaluate(model: torch.nn.Module, data: BurgersData) -> dict:
          "mean_baseline": scored(baseline[..., k], ref[..., k], u0)}
         for k, t in enumerate(data.t_out)
     ]
-    per_sample = [rel_l2(pred[i], ref[i]) for i in range(len(pred))]
+    per_sample = [rel_l2(pred[i][None], ref[i][None]) for i in range(len(pred))]  # one value per simulation
     return {
         "overall": scored(pred, ref, u0),
         "mean_baseline": scored(baseline, ref, u0),
@@ -181,13 +181,38 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
     return report
 
 
+def reevaluate(nu: str) -> dict:
+    """Recompute the test section of metrics_nu<nu>.json from the saved checkpoint
+    (same data, split and checkpoint; training metadata is kept)."""
+    cfg = load_config()
+    dcfg, mcfg, art_dir = cfg["data"], cfg["model"], resolve(cfg["training"]["artifact_dir"])
+    path = resolve(dcfg["local_dir"]) / f"burgers_nu{nu}_n{dcfg['n_samples']}_stride{dcfg['time_stride']}.h5"
+    data = load_burgers(path, mcfg["grid_size"], dcfg["split"], dcfg.get("output_stride", 1))
+    ckpt = torch.load(art_dir / f"fno_burgers_nu{nu}.pt", weights_only=False)
+    model = FNO1d(**ckpt["model"])
+    model.load_state_dict(ckpt["state_dict"])
+    metrics_path = art_dir / f"metrics_nu{nu}.json"
+    report = json.loads(metrics_path.read_text())
+    if report["test_sample_indices"] != data.test.indices.tolist():
+        raise RuntimeError("test split differs from the one recorded at training time")
+    report["test"] = evaluate(model, data)
+    report["test_reevaluated"] = time.strftime("%Y-%m-%d %H:%M:%S") + " (evaluation code fix; same checkpoint)"
+    metrics_path.write_text(json.dumps(report, indent=2))
+    log.info("TEST overall: %s", report["test"]["overall"])
+    return report
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--nu", default="0.1")
     p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--eval-only", action="store_true", help="re-evaluate the saved checkpoint on the test split")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    train(args.nu, args.epochs)
+    if args.eval_only:
+        reevaluate(args.nu)
+    else:
+        train(args.nu, args.epochs)
 
 
 if __name__ == "__main__":

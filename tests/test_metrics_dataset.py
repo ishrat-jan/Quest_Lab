@@ -20,6 +20,17 @@ def test_rel_l2_is_per_sample_mean():
     assert rel_l2(pred, ref) == pytest.approx(0.1)
 
 
+def test_rel_l2_single_2d_field_needs_sample_axis():
+    # regression: a single (n, K) field must be passed as (1, n, K); passed bare, axis 0 is
+    # taken as the sample axis and the result is a different quantity
+    rng = np.random.default_rng(0)
+    ref = rng.normal(size=(16, 4))
+    pred = ref + rng.normal(scale=0.1, size=(16, 4)) * np.linspace(0, 2, 16)[:, None]
+    whole = np.linalg.norm(pred - ref) / np.linalg.norm(ref)
+    assert rel_l2(pred[None], ref[None]) == pytest.approx(whole)
+    assert rel_l2(pred, ref) != pytest.approx(whole)
+
+
 def test_rel_l2_shape_mismatch():
     with pytest.raises(ValueError):
         rel_l2(np.zeros(3), np.zeros(4))
