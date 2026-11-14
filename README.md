@@ -82,7 +82,41 @@ for the reference solver (7 % at t = 2).
 
 ## Results (real PDEBench, held-out test split)
 
-_Filled in from `artifacts/metrics_nu0.1.json` after training._
+From `artifacts/metrics_nu0.1.json` (200 held-out simulations, never used for training or
+model selection; best-on-validation checkpoint, epoch 274/300; 55 min on a 2-core i3 CPU).
+
+| Full space-time field (t = 0.2 ... 2.0) | **FNO** | Mean-only baseline u = mean(u0) |
+|---|---|---|
+| MSE | **9.06e-6** | 1.08e-2 |
+| RMSE | **3.01e-3** | 1.04e-1 |
+| Relative L2 | **0.46 %** | 25.4 % |
+| Fluctuation rel. L2 (pooled, `‖pred−ref‖ / ‖ref−mean‖`) | **2.9 %** | 100 % |
+
+Per simulation, relative L2: median 0.28 %, p90 1.11 %, max 2.33 %.
+
+Fluctuation relative L2 per output time, FNO vs the reference solver's own agreement with
+PDEBench (`artifacts/convection_controls_nu0.1.json`):
+
+| t | 0.2 | 0.4 | 0.6 | 1.0 | 1.6 | 2.0 |
+|---|---|---|---|---|---|---|
+| FNO vs PDEBench | 2.1 % | 2.5 % | 2.5 % | 4.3 % | 9.0 % | 11.9 % |
+| reference solver vs PDEBench | 0.04 % | 0.20 % | 0.44 % | 1.0 % | 3.2 % | 6.9 % |
+
+Interpretation:
+* The FNO clearly learned the dynamics: ~55x lower relative L2 than the mean-only baseline.
+* It is ~50x less accurate than the numerical solver at early times; it is ~8x faster
+  (16 ms vs 135 ms per prediction on the 256 grid). That is the surrogate trade-off.
+* At late times part of the error is the data floor described above.
+* Generalisation gap: final train MSE ~1.7e-6 vs test MSE 9.1e-6 (mild overfitting).
+* Out-of-distribution example: a k = 24 initial condition triggers the API warning and
+  the FNO is 38 % off the solver. The warning is warranted.
+
+History notes, for transparency: (1) the per-simulation statistics were first computed
+with a bug (a single field passed without a sample axis); fixed and recomputed from the
+same checkpoint (`--eval-only`), regression test added; overall metrics were unaffected.
+(2) Commit `094b560` accidentally contains an intermediate checkpoint (~epoch 20) because
+it was made while training was running; no reported number comes from it, and it is
+replaced by commit `1d49fac`.
 
 ## Application
 
