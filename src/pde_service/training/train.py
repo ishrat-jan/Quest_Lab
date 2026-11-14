@@ -71,10 +71,31 @@ def evaluate(model: torch.nn.Module, data: BurgersData) -> dict:
     }
 
 
-def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: str | None = None) -> dict:
+def resolve_settings(cfg: dict, nu: str, experiment: str | None) -> tuple[dict, dict]:
+    """Model/training settings: defaults <- per-nu model_overrides <- named experiment."""
+    mcfg = cfg["model"] | cfg.get("model_overrides", {}).get(nu, {})
+    tcfg = dict(cfg["training"])
+    if experiment:
+        exp = cfg["experiments"][experiment]
+        mcfg |= exp.get("model", {})
+        tcfg |= exp.get("training", {})
+    return mcfg, tcfg
+
+
+def reflect(a: torch.Tensor) -> torch.Tensor:
+    """u(x) -> -u(1 - x) on the cell-centred grid (reverse the spatial axis 1, negate)."""
+    return -torch.flip(a, dims=[1])
+
+
+def artifact_name(stem: str, nu: str, tag: str | None, ext: str) -> str:
+    return f"{stem}_nu{nu}{'_' + tag if tag else ''}.{ext}"
+
+
+def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: str | None = None,
+          experiment: str | None = None, evaluate_test: bool = True) -> dict:
     cfg = cfg or load_config()
-    dcfg, tcfg = cfg["data"], cfg["training"]
-    mcfg = cfg["model"] | cfg.get("model_overrides", {}).get(nu, {})  # per-viscosity architecture
+    dcfg = cfg["data"]
+    mcfg, tcfg = resolve_settings(cfg, nu, experiment)
     epochs = epochs or tcfg["epochs"]
     torch.manual_seed(tcfg["seed"])
     torch.set_num_threads(tcfg["threads"])
@@ -97,21 +118,30 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
     if any(overlap.values()):
         raise RuntimeError(f"data leakage: split overlap {overlap}")
 
+    in_channels = 2 if mcfg.get("use_grid", True) else 1
+    for split in (data.train, data.val, data.test):
+        split.inputs = split.inputs[..., :in_channels]  # channel 0 = u0, channel 1 = x
     model_kwargs = {"modes": mcfg["modes"], "width": mcfg["width"], "n_layers": mcfg["n_layers"],
-                    "in_channels": 2, "out_channels": k_out, "conserve_mean": mcfg.get("conserve_mean", False)}
+                    "in_channels": in_channels, "out_channels": k_out,
+                    "conserve_mean": mcfg.get("conserve_mean", False)}
     model = FNO1d(**model_kwargs)
     loss_fn = {"mse": torch.nn.functional.mse_loss, "rel_l2": rel_l2_loss}[tcfg.get("loss", "rel_l2")]
     log.info("FNO parameters: %d", count_parameters(model))
     opt = torch.optim.AdamW(model.parameters(), lr=tcfg["lr"], weight_decay=tcfg["weight_decay"])
     sched = torch.optim.lr_scheduler.StepLR(opt, tcfg["scheduler_step"], tcfg["scheduler_gamma"])
 
-    run_dir = resolve(tcfg["run_dir"]) / f"fno_nu{nu}"
+    run_dir = resolve(tcfg["run_dir"]) / f"fno_nu{nu}{'_' + experiment if experiment else ''}"
     art_dir = resolve(tcfg["artifact_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)
     art_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = art_dir / f"fno_burgers_nu{nu}.pt"
+    ckpt_path = art_dir / artifact_name("fno_burgers", nu, experiment, "pt")
 
     x_tr, y_tr = data.train.inputs, data.train.targets
+    if tcfg.get("augment_reflection", False):
+        if in_channels != 1:
+            raise ValueError("augment_reflection requires use_grid: false (the x channel is not reflected)")
+        x_tr, y_tr = torch.cat([x_tr, reflect(x_tr)]), torch.cat([y_tr, reflect(y_tr)])
+        log.info("reflection augmentation: %d -> %d training samples", len(data.train.inputs), len(x_tr))
     gen = torch.Generator().manual_seed(tcfg["seed"])
     history, best_val, t_start = [], float("inf"), time.time()
     for epoch in range(1, epochs + 1):
@@ -139,7 +169,8 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
                     "t_out": data.t_out.tolist(),
                     "epoch": epoch,
                     "val_rel_l2": val,
-                    "train_u0_abs_max": float(x_tr[..., 0].abs().max()),
+                    "train_u0_abs_max": float(data.train.inputs[..., 0].abs().max()),
+                    "experiment": experiment,
                     "data_source": "PDEBench 1D Burgers (DaRUS doi:10.18419/darus-2986)",
                 },
                 ckpt_path,
@@ -150,6 +181,7 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
         (run_dir / "history.json").write_text(json.dumps(history))
 
     # held-out test evaluation, once, with the best-on-validation checkpoint
+    # (skipped for candidates being compared on validation; run --eval-only for the winner)
     ckpt = torch.load(ckpt_path, weights_only=False)
     model.load_state_dict(ckpt["state_dict"])
     report = {
@@ -168,37 +200,43 @@ def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: st
         "epochs": epochs,
         "best_val_rel_l2": ckpt["val_rel_l2"],
         "train_seconds": round(time.time() - t_start, 1),
+        "experiment": experiment,
+        "augment_reflection": bool(tcfg.get("augment_reflection", False)),
         "hardware": f"CPU {platform.processor() or platform.machine()}, torch {torch.__version__}, {tcfg['threads']} threads",
-        "test": evaluate(model, data),
+        "test": evaluate(model, data) if evaluate_test else None,
     }
-    (art_dir / f"metrics_nu{nu}.json").write_text(json.dumps(report, indent=2))
+    (art_dir / artifact_name("metrics", nu, experiment, "json")).write_text(json.dumps(report, indent=2))
     # held-out test trajectories on the model grid, served by the API for real comparisons
     test_u = np.concatenate(
         [data.test.inputs[..., :1].numpy(), data.test.targets.numpy()], axis=-1
     ).transpose(0, 2, 1)  # (S, K+1, n), [:, 0] = u0
     np.savez_compressed(art_dir / f"test_samples_nu{nu}.npz", u=test_u.astype(np.float32),
                         indices=data.test.indices, t=np.concatenate([[0.0], data.t_out]), x=data.x)
-    log.info("TEST overall: %s", report["test"]["overall"])
+    if evaluate_test:
+        log.info("TEST overall: %s", report["test"]["overall"])
+    else:
+        log.info("test evaluation skipped; best val rel L2 %.4e at epoch %d", ckpt["val_rel_l2"], ckpt["epoch"])
     return report
 
 
-def reevaluate(nu: str) -> dict:
-    """Recompute the test section of metrics_nu<nu>.json from the saved checkpoint
+def reevaluate(nu: str, experiment: str | None = None, note: str = "evaluation code fix; same checkpoint") -> dict:
+    """(Re)compute the test section of the metrics file from the saved checkpoint
     (same data, split and checkpoint; training metadata is kept)."""
     cfg = load_config()
     dcfg, art_dir = cfg["data"], resolve(cfg["training"]["artifact_dir"])
-    mcfg = cfg["model"] | cfg.get("model_overrides", {}).get(nu, {})
+    mcfg, _ = resolve_settings(cfg, nu, experiment)
     path = resolve(dcfg["local_dir"]) / f"burgers_nu{nu}_n{dcfg['n_samples']}_stride{dcfg['time_stride']}.h5"
     data = load_burgers(path, mcfg["grid_size"], dcfg["split"], dcfg.get("output_stride", 1))
-    ckpt = torch.load(art_dir / f"fno_burgers_nu{nu}.pt", weights_only=False)
+    ckpt = torch.load(art_dir / artifact_name("fno_burgers", nu, experiment, "pt"), weights_only=False)
     model = FNO1d(**ckpt["model"])
     model.load_state_dict(ckpt["state_dict"])
-    metrics_path = art_dir / f"metrics_nu{nu}.json"
+    data.test.inputs = data.test.inputs[..., : ckpt["model"]["in_channels"]]
+    metrics_path = art_dir / artifact_name("metrics", nu, experiment, "json")
     report = json.loads(metrics_path.read_text())
     if report["test_sample_indices"] != data.test.indices.tolist():
         raise RuntimeError("test split differs from the one recorded at training time")
     report["test"] = evaluate(model, data)
-    report["test_reevaluated"] = time.strftime("%Y-%m-%d %H:%M:%S") + " (evaluation code fix; same checkpoint)"
+    report["test_reevaluated"] = time.strftime("%Y-%m-%d %H:%M:%S") + f" ({note})"
     metrics_path.write_text(json.dumps(report, indent=2))
     log.info("TEST overall: %s", report["test"]["overall"])
     return report
@@ -208,13 +246,16 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--nu", default="0.1")
     p.add_argument("--epochs", type=int, default=None)
-    p.add_argument("--eval-only", action="store_true", help="re-evaluate the saved checkpoint on the test split")
+    p.add_argument("--eval-only", action="store_true", help="evaluate the saved checkpoint on the test split")
+    p.add_argument("--experiment", default=None, help="named variant from `experiments` in the config")
+    p.add_argument("--skip-test", action="store_true", help="candidate run: select on validation, no test eval")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.eval_only:
-        reevaluate(args.nu)
+        note = "selected on validation" if args.experiment else "evaluation code fix; same checkpoint"
+        reevaluate(args.nu, args.experiment, note=note)
     else:
-        train(args.nu, args.epochs)
+        train(args.nu, args.epochs, experiment=args.experiment, evaluate_test=not args.skip_test)
 
 
 if __name__ == "__main__":

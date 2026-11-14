@@ -32,6 +32,14 @@ model_overrides:            # per-viscosity architecture changes (merged over `m
   "0.01":
     modes: 32               # shocks at nu=0.01 carry energy at higher wavenumbers
 
+experiments:                # named variants: python -m pde_service.training.train --nu 0.01 --experiment sym
+  sym:                      # symmetry-aware FNO (see README); compared with the default on VALIDATION only
+    model:
+      use_grid: false       # no x-coordinate input -> exactly shift-equivariant on the periodic grid
+    training:
+      augment_reflection: true  # add u -> -u(1 - x, t) copies of the training samples (exact Burgers symmetry)
+      epochs: 200
+
 training:
   epochs: 300
   batch_size: 32

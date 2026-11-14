@@ -41,6 +41,7 @@ class Predictor:
         self.t_out = np.asarray(ckpt["t_out"])
         self.n = len(self.x)
         self.model = FNO1d(**ckpt["model"])
+        self.in_channels = ckpt["model"]["in_channels"]  # 2 = [u0, x], 1 = [u0] (shift-equivariant)
         self.model.load_state_dict(ckpt["state_dict"])
         self.model.eval()
         self.meta = {k: ckpt[k] for k in ("epoch", "val_rel_l2", "data_source", "train_u0_abs_max")}
@@ -112,7 +113,8 @@ class Predictor:
 
         t0 = time.perf_counter()
         with torch.no_grad():
-            pred = self.model(make_inputs(u0[None], self.x))[0].numpy().T  # (K, n)
+            inputs = make_inputs(u0[None], self.x)[..., : self.in_channels]
+            pred = self.model(inputs)[0].numpy().T  # (K, n)
         fno_ms = 1000 * (time.perf_counter() - t0)
         if not np.all(np.isfinite(pred)):
             raise InputError("the model produced non-finite values for this input; it is outside the supported range")

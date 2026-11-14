@@ -56,3 +56,15 @@ def test_make_inputs_shape():
     inp = make_inputs(np.zeros((3, 16)), x)
     assert inp.shape == (3, 16, 2)
     np.testing.assert_allclose(inp[1, :, 1].numpy(), x, atol=1e-7)
+
+
+def test_reflection_matches_cell_centred_grid():
+    import torch
+
+    from pde_service.training.train import reflect
+
+    n = 32
+    x = (np.arange(n) + 0.5) / n
+    u = torch.from_numpy(np.sin(2 * np.pi * x) + 0.3 * np.cos(6 * np.pi * x)).reshape(1, n, 1)
+    expected = -(np.sin(2 * np.pi * (1 - x)) + 0.3 * np.cos(6 * np.pi * (1 - x)))
+    np.testing.assert_allclose(reflect(u)[0, :, 0].numpy(), expected, atol=1e-12)
