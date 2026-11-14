@@ -53,6 +53,10 @@ Why these choices:
 * Verified (`scripts/verify_download.py`): shapes, 0 NaN/Inf, and a byte-offset check
   through h5py's own layout logic (whole samples 0/600/1199 bit-identical to the
   row-wise download); conservation of the mean.
+* The nu = 0.1 and nu = 0.01 files contain **identical initial conditions** (all 1200
+  u0 bit-identical in our subset). Each nu has its own model, and the seed-0 split is by
+  sample index, so a simulation is in the same split for both viscosities. A future
+  multi-nu model must keep this property to avoid leakage across files.
 * **Split by whole simulation**, seed 0: 900 train / 100 validation / 200 test; overlap
   0/0/0 (checked at training time; training aborts on any overlap). The test split is
   evaluated once, with the best-on-validation checkpoint.
@@ -140,6 +144,33 @@ Interpretation:
   **t <= 1.0**. Later snapshots are still returned, with `reliable_t_max` in the API
   response; the UI draws the boundary on the heatmaps and labels later slices as low
   confidence.
+
+### nu = 0.01: trained, evaluated, **not served** (negative result)
+
+Same pipeline, 32 Fourier modes (1.08M parameters), same seed-0 split (0 overlap); 19 min.
+Held-out test (`artifacts/metrics_nu0.01.json`, `artifacts/error_vs_time_nu0.01.json`):
+
+| | FNO | mean-only baseline |
+|---|---|---|
+| MSE / RMSE | 3.07e-3 / 5.5e-2 | 3.61e-2 / 1.9e-1 |
+| Relative L2 | 8.5 % | 43.4 % |
+| Fluctuation rel. L2 | 29 % | 100 % |
+
+| t | 0.2 | 0.6 | 1.0 | 1.4 | 2.0 |
+|---|---|---|---|---|---|
+| RMS true fluctuation | 0.370 | 0.212 | 0.147 | 0.112 | 0.081 |
+| RMSE FNO vs PDEBench | 5.8e-2 | 5.8e-2 | 5.6e-2 | 5.2e-2 | 5.1e-2 |
+| RMSE solver vs PDEBench | 2.3e-4 | 9.5e-5 | 2.7e-4 | 3.7e-4 | 4.4e-4 |
+| Fluct. rel. L2 FNO / solver | 15.7 % / 0.1 % | 27.5 % / 0.0 % | 38.3 % / 0.2 % | 46.6 % / 0.3 % | 63.6 % / 0.5 % |
+
+* The solver matches PDEBench to <= 0.5 % at every time, so the error is the FNO's.
+* No output time meets the 5 % window rule, so the model has **no supported window** and
+  nu = 0.01 is rejected by the API (`supported_nu: [0.1]`).
+* Failure mode: overshoot at shocks, then errors in shock position and shape. Error grows
+  with amplitude (6.2 % mean for max|u0| < 1 vs 12.0 % for > 2).
+* Validation error plateaued at ~9 % from epoch ~100 while training MSE kept falling 10x
+  (final train MSE ~8e-5 vs test 3.1e-3): data-limited overfitting with 900 training
+  simulations, not under-training.
 
 History notes, for transparency: (1) the per-simulation statistics were first computed
 with a bug (a single field passed without a sample axis); fixed and recomputed from the

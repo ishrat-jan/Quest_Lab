@@ -28,6 +28,10 @@ model:
   grid_size: 256            # spatial downsampling of the 1024 grid for training (stride 4)
   conserve_mean: true       # hard constraint: mean_x u(t) = mean_x u0 (exact for periodic Burgers)
 
+model_overrides:            # per-viscosity architecture changes (merged over `model`)
+  "0.01":
+    modes: 32               # shocks at nu=0.01 carry energy at higher wavenumbers
+
 training:
   epochs: 300
   batch_size: 32
