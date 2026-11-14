@@ -9,8 +9,8 @@ For each output time, over all test simulations (model grid):
            (diffusion damps mode k by exp(-D (2 pi k)^2 t)), so their level measures
            numerical ripple.
 
-Usage: python scripts/error_vs_time.py --nu 0.1 [--k-ripple 3]
-Writes artifacts/error_vs_time_nu<nu>.json and runs/error_vs_time_nu<nu>.png
+Usage: python scripts/error_vs_time.py --nu 0.1 [--experiment sym] [--k-ripple 3]
+Writes artifacts/error_vs_time_nu<nu>[_<experiment>].json and runs/error_vs_time_nu<nu>[_<experiment>].png
 """
 
 from __future__ import annotations
@@ -46,9 +46,11 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--nu", default="0.1")
     p.add_argument("--k-ripple", type=int, default=3)
+    p.add_argument("--experiment", default=None)
     args = p.parse_args()
     art = resolve("artifacts")
-    ck = torch.load(art / f"fno_burgers_nu{args.nu}.pt", weights_only=False)
+    tag = f"_{args.experiment}" if args.experiment else ""
+    ck = torch.load(art / f"fno_burgers_nu{args.nu}{tag}.pt", weights_only=False)
     model = FNO1d(**ck["model"])
     model.load_state_dict(ck["state_dict"])
     model.eval()
@@ -57,7 +59,7 @@ def main() -> None:
     u0, ref = u[:, 0], u[:, 1:]                                   # ref: (S, T, N)
     nu = float(ck["nu"])
     with torch.no_grad():
-        fno = model(make_inputs(u0, x)).numpy().transpose(0, 2, 1).astype(np.float64)
+        fno = model(make_inputs(u0, x)[..., : ck["model"]["in_channels"]]).numpy().transpose(0, 2, 1).astype(np.float64)
     sol = np.stack([solve_burgers(a, t, nu) for a in u0])
     mean = u0.mean(axis=1)[:, None, None]
 
@@ -77,7 +79,7 @@ def main() -> None:
                        "fno": rms(high_pass(fno, args.k_ripple)).tolist(),
                        "solver": rms(high_pass(sol, args.k_ripple)).tolist()},
     }
-    (art / f"error_vs_time_nu{args.nu}.json").write_text(json.dumps(res, indent=2))
+    (art / f"error_vs_time_nu{args.nu}{tag}.json").write_text(json.dumps(res, indent=2))
 
     print(f"nu={nu}, {len(u)} held-out test simulations, grid {u.shape[-1]}")
     print("   t | RMS u    RMS fluct | RMSE FNO-PDE  SOL-PDE   FNO-SOL | fluct relL2 FNO-PDE SOL-PDE FNO-SOL"
@@ -105,7 +107,7 @@ def main() -> None:
         ax[2].semilogy(t, r["ripple_rms"][k], ls, ms=4, label=k)
     ax[2].set(xlabel="t", title=f"ripple: RMS of modes k >= {args.k_ripple}")
     ax[2].legend(fontsize=8)
-    fig.savefig(resolve("runs") / f"error_vs_time_nu{args.nu}.png", dpi=80)
+    fig.savefig(resolve("runs") / f"error_vs_time_nu{args.nu}{tag}.png", dpi=80)
 
 
 if __name__ == "__main__":

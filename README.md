@@ -172,6 +172,25 @@ Held-out test (`artifacts/metrics_nu0.01.json`, `artifacts/error_vs_time_nu0.01.
   (final train MSE ~8e-5 vs test 3.1e-3): data-limited overfitting with 900 training
   simulations, not under-training.
 
+**Symmetry-aware follow-up (`experiments.sym`, `artifacts/*_nu0.01_sym.*`).** Two exact
+symmetries of periodic Burgers were built in, both checked with the solver to ~1e-15:
+(1) no x-coordinate input, which makes the FNO exactly shift-equivariant (unit-tested);
+(2) reflection augmentation u(x, t) -> -u(1 - x, t), doubling the training set to 1800.
+Same split, seed, 32 modes; 200 epochs (32 min). The two models were compared on
+**validation only**, then the selected one was evaluated on test once:
+
+| | current (`[u0, x]`, 900) | **sym (`[u0]`, 900 + mirror)** |
+|---|---|---|
+| best validation rel. L2 (selection) | 8.41 % | **4.37 %** |
+| test rel. L2 / fluct. rel. L2 | 8.5 % / 29.2 % | **4.4 % / 17.4 %** |
+| test per-simulation rel. L2: median / p90 / max | 7.6 / 16.7 / 27.5 % | **4.1 / 9.3 / 12.8 %** |
+| fluct. rel. L2 at t = 0.2 / 1.0 / 2.0 | 15.7 / 38.3 / 63.6 % | **9.5 / 22.3 / 37.9 %** |
+
+The symmetries roughly halve the error and reduce overfitting, but even t = 0.2 (9.5 %)
+misses the 5 % window rule fixed before these results, so **nu = 0.01 remains unsupported**
+by the API. The rule was not relaxed after seeing the numbers. The two changes were made
+together, so their individual contributions are not separated.
+
 History notes, for transparency: (1) the per-simulation statistics were first computed
 with a bug (a single field passed without a sample axis); fixed and recomputed from the
 same checkpoint (`--eval-only`), regression test added; overall metrics were unaffected.
