@@ -73,7 +73,8 @@ def evaluate(model: torch.nn.Module, data: BurgersData) -> dict:
 
 def train(nu: str, epochs: int | None = None, cfg: dict | None = None, label: str | None = None) -> dict:
     cfg = cfg or load_config()
-    dcfg, mcfg, tcfg = cfg["data"], cfg["model"], cfg["training"]
+    dcfg, tcfg = cfg["data"], cfg["training"]
+    mcfg = cfg["model"] | cfg.get("model_overrides", {}).get(nu, {})  # per-viscosity architecture
     epochs = epochs or tcfg["epochs"]
     torch.manual_seed(tcfg["seed"])
     torch.set_num_threads(tcfg["threads"])
@@ -185,7 +186,8 @@ def reevaluate(nu: str) -> dict:
     """Recompute the test section of metrics_nu<nu>.json from the saved checkpoint
     (same data, split and checkpoint; training metadata is kept)."""
     cfg = load_config()
-    dcfg, mcfg, art_dir = cfg["data"], cfg["model"], resolve(cfg["training"]["artifact_dir"])
+    dcfg, art_dir = cfg["data"], resolve(cfg["training"]["artifact_dir"])
+    mcfg = cfg["model"] | cfg.get("model_overrides", {}).get(nu, {})
     path = resolve(dcfg["local_dir"]) / f"burgers_nu{nu}_n{dcfg['n_samples']}_stride{dcfg['time_stride']}.h5"
     data = load_burgers(path, mcfg["grid_size"], dcfg["split"], dcfg.get("output_stride", 1))
     ckpt = torch.load(art_dir / f"fno_burgers_nu{nu}.pt", weights_only=False)
