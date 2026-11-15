@@ -5,9 +5,11 @@ user-supplied initial condition, using a Fourier Neural Operator (FNO) trained o
 official **PDEBench** dataset, and checks the prediction against an independent,
 validated numerical solver.
 
-> **Deployment status:** not deployed by me. The repository contains a Dockerfile
-> intended for Render (it honours `$PORT`). It has not been built locally (no Docker
-> on the development machine), so the first real image build will be on the host.
+> **Deployment status:** deployed on Render (free instance) at
+> **https://quest-burgers.onrender.com/**, built by Render from this repository's
+> Dockerfile. Deployed by the author; verified from the development machine on
+> 2026-11-15 (see [Live deployment checks](#live-deployment-checks)). No uptime is claimed:
+> the free instance sleeps when idle, and the first request after sleeping took 43 s.
 
 ## The problem
 
@@ -335,7 +337,28 @@ as evidence). What was checked without Docker: every pinned package has a Python
 manylinux x86_64 wheel (torch from the CPU index), and the exact `CMD` was run with `PORT`
 set from a **fresh `git clone`**, copying only what the Dockerfile copies (`configs`, `src`,
 `frontend`, `artifacts`, with `PYTHONPATH=src`): health, prediction and frontend responded.
-A real `docker build` has only been run by Render.
+A real `docker build` has only been run by Render (second deploy succeeded).
+
+#### Live deployment checks
+
+Run from the development machine against https://quest-burgers.onrender.com/ on
+2026-11-15 (06:06 and 06:24 UTC). Single measurements, not averages.
+
+| Check | Result |
+|---|---|
+| `GET /api/health` | 200, `models_loaded: [0.1]`, no load errors |
+| `GET /api/info` | 200, `supported_nu: [0.1]`, `reliable_t_max: 1.0`, test rel. L2 0.004614 (`REAL RESULT` label) |
+| `POST /api/predict` held-out test sample 3 | 200; rel. L2 vs PDEBench 0.002446, **identical to the local model**; vs solver 0.002292 |
+| `POST /api/predict` user sine IC with solver | 200; field 11 x 256; FNO vs solver rel. L2 3.6 %; no warnings |
+| nu = 0.01 / wrong length / missing input | 422 with readable messages |
+| `GET /`, `GET /app.js` | 200; page loads plotly 2.35.2 from the CDN |
+| **Cold start**: first request after 18 min with no requests from us | `GET /api/health` 200, time to first byte **43.3 s** (connect 0.5 s) |
+| first prediction after waking (with solver) | 3.6 s |
+| warm requests | health 0.4-1.2 s; prediction with solver ~2.3-2.4 s |
+| server-side compute (from `timing_ms`) | FNO 196-535 ms, solver ~1.0 s (vs 16 ms / 135 ms on the 2-core development laptop) |
+
+The page was not inspected in a browser by me (no browser automation in this session);
+the API responses and static files were checked with HTTP requests.
 
 Deploy history: the first Render deploy failed with `ModuleNotFoundError: pde_service.data`.
 The unanchored `.gitignore` pattern `data/` had also ignored the source package
