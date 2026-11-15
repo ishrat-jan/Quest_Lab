@@ -332,10 +332,16 @@ On Render: new Web Service from this repo, environment "Docker". Render sets `PO
 
 `.dockerignore` keeps the unserved nu = 0.01 artifacts out of the image (they stay in git
 as evidence). What was checked without Docker: every pinned package has a Python 3.12
-manylinux x86_64 wheel (torch from the CPU index), and the exact `CMD` was run with
-`PORT=8899` from a copy containing only the files the Dockerfile copies (`configs`, `src`,
+manylinux x86_64 wheel (torch from the CPU index), and the exact `CMD` was run with `PORT`
+set from a **fresh `git clone`**, copying only what the Dockerfile copies (`configs`, `src`,
 `frontend`, `artifacts`, with `PYTHONPATH=src`): health, prediction and frontend responded.
-A real `docker build` has not been run.
+A real `docker build` has only been run by Render.
+
+Deploy history: the first Render deploy failed with `ModuleNotFoundError: pde_service.data`.
+The unanchored `.gitignore` pattern `data/` had also ignored the source package
+`src/pde_service/data/`, so it was never committed; the earlier container check copied the
+working tree instead of git content and missed it. Fixed by anchoring (`/data/`) and
+re-checking from a fresh clone.
 
 ## Tests
 
