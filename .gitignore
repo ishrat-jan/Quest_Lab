@@ -5,9 +5,9 @@ __pycache__/
 .pytest_cache/
 .venv/
 
-# Data (downloaded from PDEBench/DaRUS; re-create with scripts/download_subset.py)
-data/
+# Top-level data dir only (anchored with "/" so src/pde_service/data/ is NOT ignored); downloaded from PDEBench/DaRUS; re-create with scripts/download_subset.py
+/data/
 
 # Large training outputs (the small final checkpoint + metrics in artifacts/ are committed)
-runs/
+/runs/
 *.log
